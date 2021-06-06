@@ -16,7 +16,6 @@ rules:
     resources:
       - deployments
       - statefulsets
-      - endpoints
       - leases
     verbs:
       - get
@@ -25,9 +24,10 @@ rules:
       - update
       - patch
   - apiGroups:
-      - batch
+      - "*"
     resources:
       - cronjobs
+      - endpoints
     verbs:
       - get
       - list
@@ -54,7 +54,7 @@ roleRef:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: cron-restarter-deployment
+  name: cron-restarter
   namespace: kube-system
   labels:
     app: cron-restarter
@@ -72,7 +72,7 @@ spec:
         - name: cron-restarter
           image: crazytaxii/kube-cron-restarter:latest
           command:
-            - ./restarter
+            - restarter
             - --leader-elect=true
           imagePullPolicy: IfNotPresent
           livenessProbe:
