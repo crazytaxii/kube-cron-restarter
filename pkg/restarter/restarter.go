@@ -253,8 +253,6 @@ func (rc *RestarterController) syncHandler(key string) error {
 	}
 	namespaceMeta := namespace + "/" + name
 
-	klog.Infof("namespace: %s, name: %s, kind: %s", namespace, name, kind)
-
 	// Get the Deployment/StatefulSet with this namespace/name/kind
 	obj, err := rc.fetchObject(namespace, name, kind)
 	if err != nil {
@@ -278,7 +276,7 @@ func (rc *RestarterController) syncHandler(key string) error {
 	}
 
 	arCtx := NewAutoRestarterContext(obj, WithSchedule(schedule), WithImage(rc.KubeCtlImage),
-		WithServiceAccount(ServiceAccountName))
+		WithServiceAccount(ServiceAccountName), WithLabels(obj.GetLabels()))
 	if obj.GetDeletionTimestamp().IsZero() {
 		// The object is not being deleted, so if it does not have our finalizer,
 		// then lets add the finalizer and update the object.

@@ -52,7 +52,7 @@ spec:
 The cron restarter controller will create a CronJob with schedule `* * * * *` to restart nginx Pod minutely.
 
 ```bash
-$ kubectl get po -n kube-system
+$ kubectl get po -n kube-system -l app=nginx
 NAME                                                             READY   STATUS      RESTARTS   AGE
 default-nginx-deployment-deployment-restarter-1622990040-gwbrh   0/1     Completed   0          2m44s
 default-nginx-deployment-deployment-restarter-1622990100-d87cl   0/1     Completed   0          104s

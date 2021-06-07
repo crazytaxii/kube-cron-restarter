@@ -14,13 +14,14 @@ import (
 
 type (
 	AutoRestarterContext struct {
-		Name           string        `json:"name"`
-		Namespace      string        `json:"namespace"`
-		Kind           string        `json:"kind"`
-		Schedule       string        `json:"schedule"` // optional
-		Image          string        `json:"image"`    // optional
-		Object         metav1.Object `json:"object"`
-		ServiceAccount string        `json:"service_account"` // optional
+		Name           string
+		Namespace      string
+		Kind           string
+		Schedule       string // optional
+		Image          string // optional
+		Object         metav1.Object
+		ServiceAccount string            // optional
+		Labels         map[string]string // optional
 	}
 	AutoRestarterContextOptions func(*AutoRestarterContext)
 )
@@ -68,6 +69,12 @@ func WithImage(image string) AutoRestarterContextOptions {
 func WithServiceAccount(serviceAccount string) AutoRestarterContextOptions {
 	return func(o *AutoRestarterContext) {
 		o.ServiceAccount = serviceAccount
+	}
+}
+
+func WithLabels(labels map[string]string) AutoRestarterContextOptions {
+	return func(o *AutoRestarterContext) {
+		o.Labels = labels
 	}
 }
 

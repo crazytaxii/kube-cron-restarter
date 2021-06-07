@@ -17,6 +17,7 @@ func newCronJob(arCtx AutoRestarterContext) *batchv1beta1.CronJob {
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(arCtx.Object, appsv1.SchemeGroupVersion.WithKind(arCtx.Kind)),
 			},
+			Labels: arCtx.Labels,
 		},
 		Spec: batchv1beta1.CronJobSpec{
 			Schedule:    arCtx.Schedule,
@@ -27,8 +28,14 @@ func newCronJob(arCtx AutoRestarterContext) *batchv1beta1.CronJob {
 
 func newJobTemplate(arCtx AutoRestarterContext) batchv1beta1.JobTemplateSpec {
 	return batchv1beta1.JobTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: arCtx.Labels,
+		},
 		Spec: batchv1.JobSpec{
 			Template: v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: arCtx.Labels,
+				},
 				Spec: v1.PodSpec{
 					Containers: []v1.Container{
 						newKubectlContainer(arCtx),
