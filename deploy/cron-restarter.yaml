@@ -16,7 +16,6 @@ rules:
     resources:
       - deployments
       - statefulsets
-      - leases
     verbs:
       - get
       - list
@@ -28,6 +27,7 @@ rules:
     resources:
       - cronjobs
       - endpoints
+      - leases
     verbs:
       - get
       - list
