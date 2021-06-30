@@ -71,7 +71,6 @@ func Run(cfg *config.AutoRestarterConfig, stopCh <-chan struct{}) error {
 	}
 
 	if cfg.LeaderElection.LeaderElect {
-
 		hostname, err := os.Hostname()
 		if err != nil {
 			return err
@@ -100,10 +99,11 @@ func Run(cfg *config.AutoRestarterConfig, stopCh <-chan struct{}) error {
 		}()
 
 		leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
-			Lock:          rl,
-			LeaseDuration: cfg.LeaderElection.LeaseDuration.Duration,
-			RenewDeadline: cfg.LeaderElection.RenewDeadline.Duration,
-			RetryPeriod:   cfg.LeaderElection.RetryPeriod.Duration,
+			Lock:            rl,
+			ReleaseOnCancel: true,
+			LeaseDuration:   cfg.LeaderElection.LeaseDuration.Duration,
+			RenewDeadline:   cfg.LeaderElection.RenewDeadline.Duration,
+			RetryPeriod:     cfg.LeaderElection.RetryPeriod.Duration,
 			Callbacks: leaderelection.LeaderCallbacks{
 				OnStartedLeading: run,
 				OnStoppedLeading: func() {
