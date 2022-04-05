@@ -1,4 +1,4 @@
-package restarter
+package controller
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/crazytaxii/kube-cron-restarter/pkg/utils/sliceutil"
 	"github.com/robfig/cron"
+	"github.com/spf13/pflag"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -62,13 +63,12 @@ type (
 
 		workqueue           workqueue.RateLimitingInterface
 		kubeInformerFactory kubeinformers.SharedInformerFactory
-		ControllerOptions
+		*ControllerOptions
 	}
 	ControllerOptions struct {
-		CronJobNamespace string // all relative CronJobs will put into this namespace
-		KubeCtlImage     string // image with kubectl
+		CronJobNamespace string `json:"cronjob_namespace" yaml:"cronJobNamespace"` // all relative CronJobs will put into this namespace
+		KubeCtlImage     string `json:"kubectl_image" yaml:"kubectlImage"`         // image with kubectl
 	}
-	ControllerOptionsFunc func(*ControllerOptions)
 )
 
 func NewDefaultControllerOptions() *ControllerOptions {
@@ -78,22 +78,15 @@ func NewDefaultControllerOptions() *ControllerOptions {
 	}
 }
 
-func WithCronJobNamespace(namespace string) ControllerOptionsFunc {
-	return func(o *ControllerOptions) {
-		o.CronJobNamespace = namespace
-	}
-}
-
-func WithKubeCtlImage(image string) ControllerOptionsFunc {
-	return func(o *ControllerOptions) {
-		o.KubeCtlImage = image
-	}
+func BindControllerOptionsFlags(co *ControllerOptions, fs *pflag.FlagSet) {
+	fs.StringVarP(&co.CronJobNamespace, "cronjob-namespace", "", co.CronJobNamespace, "The namespace of CronJob for rolling out restart")
+	fs.StringVarP(&co.KubeCtlImage, "kubectl-image", "", co.KubeCtlImage, "The image used for rolling out restart")
 }
 
 func NewRestarterController(
 	kubeClientset kubernetes.Interface,
 	resyncPeriod time.Duration,
-	controllerOptions ...ControllerOptionsFunc,
+	co *ControllerOptions,
 ) (*RestarterController, error) {
 	// Create event broadcaster
 	eventBroadcaster := record.NewBroadcaster()
@@ -105,17 +98,12 @@ func NewRestarterController(
 	statefulsetInformer := kubeInformerFactory.Apps().V1().StatefulSets()
 	cronJobInformer := kubeInformerFactory.Batch().V1beta1().CronJobs()
 
-	opts := NewDefaultControllerOptions()
-	for _, o := range controllerOptions {
-		o(opts)
-	}
-
 	rc := &RestarterController{
 		kubeclientset:       kubeClientset,
 		eventRecorder:       eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: ControllerName}),
 		workqueue:           workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "cron-restarter"),
 		kubeInformerFactory: kubeInformerFactory,
-		ControllerOptions:   *opts,
+		ControllerOptions:   co,
 	}
 
 	// Set up event handlers for Deployments change

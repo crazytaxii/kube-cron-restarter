@@ -1,4 +1,4 @@
-package restarter
+package controller
 
 import (
 	"fmt"

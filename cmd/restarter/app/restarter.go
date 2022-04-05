@@ -7,8 +7,9 @@ import (
 
 	"github.com/crazytaxii/kube-cron-restarter/cmd/restarter/app/config"
 	"github.com/crazytaxii/kube-cron-restarter/cmd/restarter/app/options"
-	"github.com/crazytaxii/kube-cron-restarter/pkg/restarter"
+	"github.com/crazytaxii/kube-cron-restarter/pkg/controller"
 	"github.com/spf13/cobra"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/leaderelection"
@@ -52,23 +53,29 @@ func Run(cfg *config.AutoRestarterConfig, stopCh <-chan struct{}) error {
 		return err
 	}
 
-	controller, err := restarter.NewRestarterController(kubeClientset, cfg.ResyncPeriod,
-		restarter.WithCronJobNamespace(cfg.CronJobNamespace),
-		restarter.WithKubeCtlImage(cfg.KubeCtlImage),
+	controller, err := controller.NewRestarterController(kubeClientset, cfg.ResyncPeriod,
+		cfg.ControllerOptions,
 	)
 	if err != nil {
 		return err
 	}
 
-	// Running a health check server
-	go StartHealthzServer(cfg.HealthzPort)
-
 	run := func(ctx context.Context) {
+		// Running a health check server
+		go StartHealthzServer(cfg.HealthzPort)
 		// Launch 2 workers to process resources
-		if err = controller.Run(workers, stopCh); err != nil {
+		if err := controller.Run(workers, stopCh); err != nil {
 			klog.Fatalf("Error running controller: %v", err)
 		}
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-stopCh
+		klog.Info("Received termination, signaling shutdown")
+		cancel()
+	}()
 
 	if cfg.LeaderElection.LeaderElect {
 		hostname, err := os.Hostname()
@@ -76,46 +83,42 @@ func Run(cfg *config.AutoRestarterConfig, stopCh <-chan struct{}) error {
 			return err
 		}
 		id := fmt.Sprintf("%s_%s", hostname, string(uuid.NewUUID()))
-		rl, err := resourcelock.New(
-			cfg.LeaderElection.ResourceLock,
-			cfg.LeaderElection.ResourceNamespace,
-			cfg.LeaderElection.ResourceName,
-			cfg.LeaderClient.CoreV1(),
-			cfg.LeaderClient.CoordinationV1(),
-			resourcelock.ResourceLockConfig{
+		lock := &resourcelock.LeaseLock{
+			LeaseMeta: metav1.ObjectMeta{
+				Name:      cfg.LeaderElection.ResourceName,
+				Namespace: cfg.LeaderElection.ResourceNamespace,
+			},
+			Client: kubeClientset.CoordinationV1(),
+			LockConfig: resourcelock.ResourceLockConfig{
 				Identity: id,
 			},
-		)
-		if err != nil {
-			return err
 		}
 
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go func() {
-			<-stopCh
-			klog.Info("Received termination, signaling shutdown")
-			cancel()
-		}()
-
 		leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
-			Lock:            rl,
+			Lock:            lock,
 			ReleaseOnCancel: true,
-			LeaseDuration:   cfg.LeaderElection.LeaseDuration.Duration,
-			RenewDeadline:   cfg.LeaderElection.RenewDeadline.Duration,
-			RetryPeriod:     cfg.LeaderElection.RetryPeriod.Duration,
+			LeaseDuration:   cfg.LeaderElection.LeaseDuration,
+			RenewDeadline:   cfg.LeaderElection.RenewDeadline,
+			RetryPeriod:     cfg.LeaderElection.RetryPeriod,
 			Callbacks: leaderelection.LeaderCallbacks{
 				OnStartedLeading: run,
 				OnStoppedLeading: func() {
-					klog.Error("Leader election lost")
+					klog.Errorf("Leader election lost: %d", id)
+				},
+				OnNewLeader: func(identity string) {
+					// we're notified when new leader elected
+					if identity == id {
+						// I just got the lock
+						return
+					}
+					klog.Infof("new leader elected: %s", identity)
 				},
 			},
 			Name: cfg.LeaderElection.ResourceNamespace,
 		})
-
 		return nil
 	}
 
-	run(context.TODO())
+	run(ctx)
 	return nil
 }

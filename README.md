@@ -1,4 +1,4 @@
-# kube-cron-restarter [![Build Status](https://travis-ci.com/crazytaxii/kube-cron-restarter.svg?branch=main)](https://travis-ci.com/crazytaxii/kube-cron-restarter) [![Open in Visual Studio Code](https://open.vscode.dev/badges/open-in-vscode.svg)](https://open.vscode.dev/crazytaxii/kube-cron-restarter)
+# kube-cron-restarter [![Build Status](https://travis-ci.com/crazytaxii/kube-cron-restarter.svg?branch=main)](https://travis-ci.com/crazytaxii/kube-cron-restarter)
 
 The cron restarter is a controller restarts specific pod regularly.
 
