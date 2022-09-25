@@ -14,7 +14,9 @@ const (
 func StartHealthzServer(port int) {
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(Success))
+		if _, err := w.Write([]byte(Success)); err != nil {
+			klog.Errorf("Health server sends success err: %v", err)
+		}
 	})
 
 	klog.Infof("Starting healthz server, listening on port: %d", port)

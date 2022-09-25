@@ -3,20 +3,18 @@ package controller
 import (
 	"fmt"
 
-	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const defaultBackoffLimit int32 = 3
+
 func newCronJob(arCtx AutoRestarterContext) *batchv1beta1.CronJob {
 	return &batchv1beta1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: joinCronJobName(arCtx.Namespace, arCtx.Name, arCtx.Kind),
-			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(arCtx.Object, appsv1.SchemeGroupVersion.WithKind(arCtx.Kind)),
-			},
+			Name:   joinCronJobName(arCtx.Namespace, arCtx.Name, arCtx.Kind),
 			Labels: arCtx.Labels,
 		},
 		Spec: batchv1beta1.CronJobSpec{
@@ -27,11 +25,13 @@ func newCronJob(arCtx AutoRestarterContext) *batchv1beta1.CronJob {
 }
 
 func newJobTemplate(arCtx AutoRestarterContext) batchv1beta1.JobTemplateSpec {
+	backoffLimit := defaultBackoffLimit
 	return batchv1beta1.JobTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{
 			Labels: arCtx.Labels,
 		},
 		Spec: batchv1.JobSpec{
+			BackoffLimit: &backoffLimit,
 			Template: v1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: arCtx.Labels,

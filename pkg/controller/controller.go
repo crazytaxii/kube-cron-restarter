@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/pflag"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1beta1 "k8s.io/api/batch/v1beta1"
-	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,11 +39,15 @@ const (
 	// fails to sync due to a Deployment already existing
 	MessageResourceExists      = "Resource %q already exists and is not managed by Deployment"
 	AutoRestarterFinalizer     = "cron-restarter.io/finalizer"
+	AnnRestarterKey            = "auto-restarter.io/restarter"
 	AutoRestarterContainerName = "restarter"
 	ServiceAccountName         = "cron-restarter"
 
 	DefaultCronJobNamespace = "kube-system"
 	DefaultKubeCtlImage     = "bitnami/kubectl:1.18.6"
+
+	deploymentLC  = "deployment"
+	statefulsetLC = "statefulset"
 )
 
 type (
@@ -245,18 +248,25 @@ func (rc *RestarterController) syncHandler(key string) error {
 	obj, err := rc.fetchObject(namespace, name, kind)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			utilruntime.HandleError(fmt.Errorf("%s '%s' in work queue no longer exists", kind, namespaceMeta))
+			utilruntime.HandleError(fmt.Errorf("%s %q in work queue no longer exists", kind, namespaceMeta))
 			return nil
 		}
 		return err
 	}
 
 	// Get value of AutoRestarterAnnotationKey in annotations map
-	schedule := getScheduleFromAnnotations(obj.GetAnnotations(), AutoRestarterAnnotationKey)
-	if schedule == "" {
-		klog.Infof("%s '%s' is no need to restart", kind, namespaceMeta)
+	schedule, ok := obj.GetAnnotations()[AutoRestarterAnnotationKey]
+	if !ok || schedule == "" {
+		arCtx := NewAutoRestarterContext(obj, WithServiceAccount(ServiceAccountName), WithLabels(obj.GetLabels()))
+		// Remove the needless CronJob.
+		if ok, err := rc.syncCronJobForDeletion(*arCtx); err != nil {
+			return fmt.Errorf("Deleting CronJob '%s/%s' err %v", rc.CronJobNamespace, joinCronJobName(arCtx.Namespace, arCtx.Name, arCtx.Kind), err)
+		} else if ok {
+			klog.Infof("%s %q is no need to restart", kind, namespaceMeta)
+		}
 		return nil
 	}
+
 	// Validate cron expression
 	if _, err := cron.ParseStandard(schedule); err != nil {
 		utilruntime.HandleError(fmt.Errorf("Invalid cron expression '%s'", schedule))
@@ -279,7 +289,7 @@ func (rc *RestarterController) syncHandler(key string) error {
 	} else {
 		// The object is being deleted
 		if sliceutil.ContainString(obj.GetFinalizers(), AutoRestarterFinalizer) {
-			if err := rc.syncCronJobForDeletion(*arCtx); err != nil {
+			if _, err := rc.syncCronJobForDeletion(*arCtx); err != nil {
 				return err
 			}
 
@@ -293,25 +303,11 @@ func (rc *RestarterController) syncHandler(key string) error {
 		return nil
 	}
 
-	cronJob, err := rc.syncCronJob(*arCtx)
-	if err != nil {
+	if _, err := rc.syncCronJob(*arCtx); err != nil {
 		return err
 	}
 
-	// If the CronJob is not controlled by this Deployment resource, we should log
-	// a warning to the event recorder and return error msg.
-	if !metav1.IsControlledBy(cronJob, obj) {
-		errMsg := fmt.Sprintf(MessageResourceExists, obj.GetName())
-		switch v := obj.(type) {
-		case *appsv1.Deployment:
-			rc.eventRecorder.Event(v, corev1.EventTypeWarning, ErrResourceExists, errMsg)
-		case *appsv1.StatefulSet:
-			rc.eventRecorder.Event(v, corev1.EventTypeWarning, ErrResourceExists, errMsg)
-		}
-		return goerrors.New(errMsg)
-	}
-
-	return err
+	return nil
 }
 
 // Get the Deployment/StatefulSet with this namespace/name/kind
@@ -344,10 +340,16 @@ func (rc *RestarterController) syncCronJob(arCtx AutoRestarterContext) (*batchv1
 	return cronJob, nil
 }
 
-func (rc *RestarterController) syncCronJobForDeletion(arCtx AutoRestarterContext) error {
+func (rc *RestarterController) syncCronJobForDeletion(arCtx AutoRestarterContext) (bool, error) {
 	name := joinCronJobName(arCtx.Namespace, arCtx.Name, arCtx.Kind)
-	return rc.kubeclientset.BatchV1beta1().CronJobs(rc.CronJobNamespace).Delete(context.TODO(),
-		name, metav1.DeleteOptions{})
+	if err := rc.kubeclientset.BatchV1beta1().CronJobs(rc.CronJobNamespace).Delete(context.TODO(),
+		name, metav1.DeleteOptions{}); err != nil {
+		if errors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // enqueue takes a Deployment/StatefulSet resource and converts it into a namespace/name
@@ -388,33 +390,26 @@ func (rc *RestarterController) handleCronJob(obj interface{}) {
 		klog.V(4).Infof("Recovered deleted object '%s' from tombstone", object.GetName())
 	}
 	klog.V(4).Infof("Processing object: %s", object.GetName())
-	if ownerRef := metav1.GetControllerOf(object); ownerRef != nil {
-		// If this object is not owned by a Deployment/StatefulSet, we should not do anything more
-		// with it.
-		if strings.ToLower(ownerRef.Kind) != "deployment" &&
-			strings.ToLower(ownerRef.Kind) != "statefulset" {
-			return
-		}
-
-		ownerNamespace, _, _ := splitCronJobName(object.GetName())
-		switch strings.ToLower(ownerRef.Kind) {
-		case "deployment":
-			owner, err := rc.deploymentsLister.Deployments(ownerNamespace).Get(ownerRef.Name)
-			if err != nil {
-				klog.V(4).Infof("ignoring orphaned object '%s' of deployment '%s'", object.GetSelfLink(), ownerRef.Name)
-				return
+	if _, ok := object.GetAnnotations()[AnnRestarterKey]; object.GetNamespace() == rc.CronJobNamespace && ok {
+		namespace, name, kind, ok := splitCronJobName(object.GetName())
+		if ok {
+			switch strings.ToLower(kind) {
+			case deploymentLC:
+				deployment, err := rc.deploymentsLister.Deployments(namespace).Get(name)
+				if err != nil {
+					utilruntime.HandleError(fmt.Errorf("error getting deployment '%s/%s'", namespace, name))
+					return
+				}
+				rc.enqueue(deployment)
+			case statefulsetLC:
+				statefulset, err := rc.statefulSetsLister.StatefulSets(namespace).Get(name)
+				if err != nil {
+					utilruntime.HandleError(fmt.Errorf("error getting statefulset '%s/%s'", namespace, name))
+					return
+				}
+				rc.enqueue(statefulset)
 			}
-			rc.enqueue(owner)
-		case "statefulset":
-			owner, err := rc.statefulSetsLister.StatefulSets(ownerNamespace).Get(ownerRef.Name)
-			if err != nil {
-				klog.V(4).Infof("ignoring orphaned object '%s' of statefulset '%s'", object.GetSelfLink(), ownerRef.Name)
-				return
-			}
-			rc.enqueue(owner)
 		}
-
-		return
 	}
 }
 

@@ -87,21 +87,16 @@ func joinCronJobName(namespace, name, kind string) string {
 	return fmt.Sprintf("%s-%s-%s-restarter", namespace, name, strings.ToLower(kind))
 }
 
-func getScheduleFromAnnotations(annotations map[string]string, want string) string {
-	schedule, ok := annotations[want]
-	if !ok {
-		return ""
-	}
-	return schedule
-}
-
 // Split namespace, name and kind from the name of our CronJob
-func splitCronJobName(cronJobName string) (namespace, name, kind string) {
+func splitCronJobName(cronJobName string) (namespace, name, kind string, ok bool) {
 	parts := strings.Split(cronJobName, "-")
-	if len(parts) >= 4 {
-		return parts[0], parts[1], parts[2]
+	if len(parts) != 4 {
+		return
 	}
-	return
+	if parts[3] != "restarter" {
+		return
+	}
+	return parts[0], parts[1], parts[2], true
 }
 
 // metaKeyFunc joins namespace/name/kind to a key
