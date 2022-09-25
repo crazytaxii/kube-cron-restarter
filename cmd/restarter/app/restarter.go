@@ -8,6 +8,7 @@ import (
 	"github.com/crazytaxii/kube-cron-restarter/cmd/restarter/app/config"
 	"github.com/crazytaxii/kube-cron-restarter/cmd/restarter/app/options"
 	"github.com/crazytaxii/kube-cron-restarter/pkg/controller"
+	"github.com/crazytaxii/kube-cron-restarter/pkg/signals"
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -15,7 +16,6 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/controller-runtime/pkg/runtime/signals"
 )
 
 const workers = 2

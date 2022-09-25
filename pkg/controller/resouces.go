@@ -2,31 +2,37 @@ package controller
 
 import (
 	"fmt"
+	"strconv"
 
 	batchv1 "k8s.io/api/batch/v1"
-	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-const defaultBackoffLimit int32 = 3
+const (
+	AutoRestarterContainerName = "restarter"
 
-func newCronJob(arCtx AutoRestarterContext) *batchv1beta1.CronJob {
-	return &batchv1beta1.CronJob{
+	defaultBackoffLimit int32 = 3
+)
+
+func newCronJob(arCtx AutoRestarterContext) *batchv1.CronJob {
+	cronJob := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   joinCronJobName(arCtx.Namespace, arCtx.Name, arCtx.Kind),
 			Labels: arCtx.Labels,
 		},
-		Spec: batchv1beta1.CronJobSpec{
+		Spec: batchv1.CronJobSpec{
 			Schedule:    arCtx.Schedule,
 			JobTemplate: newJobTemplate(arCtx),
 		},
 	}
+	metav1.SetMetaDataAnnotation(&cronJob.ObjectMeta, AnnRestarterKey, strconv.FormatBool(true))
+	return cronJob
 }
 
-func newJobTemplate(arCtx AutoRestarterContext) batchv1beta1.JobTemplateSpec {
+func newJobTemplate(arCtx AutoRestarterContext) batchv1.JobTemplateSpec {
 	backoffLimit := defaultBackoffLimit
-	return batchv1beta1.JobTemplateSpec{
+	return batchv1.JobTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{
 			Labels: arCtx.Labels,
 		},

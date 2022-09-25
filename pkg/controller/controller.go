@@ -11,7 +11,7 @@ import (
 	"github.com/robfig/cron"
 	"github.com/spf13/pflag"
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1beta1 "k8s.io/api/batch/v1beta1"
+	batchv1 "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,7 +22,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
 	appslisters "k8s.io/client-go/listers/apps/v1"
-	batchListers "k8s.io/client-go/listers/batch/v1beta1"
+	batchListers "k8s.io/client-go/listers/batch/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
@@ -37,17 +37,20 @@ const (
 	ErrResourceExists = "ErrResourceExists"
 	// MessageResourceExists is the message used for Events when a resource
 	// fails to sync due to a Deployment already existing
-	MessageResourceExists      = "Resource %q already exists and is not managed by Deployment"
-	AutoRestarterFinalizer     = "cron-restarter.io/finalizer"
-	AnnRestarterKey            = "auto-restarter.io/restarter"
-	AutoRestarterContainerName = "restarter"
-	ServiceAccountName         = "cron-restarter"
+	MessageResourceExists  = "Resource %q already exists and is not managed by Deployment"
+	AutoRestarterFinalizer = "cron-restarter.io/finalizer"
+	AnnRestarterKey        = "auto-restarter.io/restarter"
+	ServiceAccountName     = "cron-restarter"
 
 	DefaultCronJobNamespace = "kube-system"
 	DefaultKubeCtlImage     = "bitnami/kubectl:1.18.6"
 
 	deploymentLC  = "deployment"
 	statefulsetLC = "statefulset"
+
+	eventAdding   = "Adding"
+	eventUpdating = "Updating"
+	eventDeleting = "Deleting"
 )
 
 type (
@@ -99,7 +102,7 @@ func NewRestarterController(
 	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeClientset, resyncPeriod)
 	deploymentInformer := kubeInformerFactory.Apps().V1().Deployments()
 	statefulsetInformer := kubeInformerFactory.Apps().V1().StatefulSets()
-	cronJobInformer := kubeInformerFactory.Batch().V1beta1().CronJobs()
+	cronJobInformer := kubeInformerFactory.Batch().V1().CronJobs()
 
 	rc := &RestarterController{
 		kubeclientset:       kubeClientset,
@@ -217,7 +220,7 @@ func (rc *RestarterController) processNextWorkItem() bool {
 		if err := rc.syncHandler(key); err != nil {
 			// Put the item back on the workqueue to handle any transient errors.
 			rc.workqueue.AddRateLimited(key)
-			return fmt.Errorf("Syncing err '%s': %s, requeuing", key, err.Error())
+			return fmt.Errorf("Syncing err %q: %s, requeuing", key, err.Error())
 		}
 		// Finally, if no error occurs we Forget this item so it does not
 		// get queued again until another change happens.
@@ -245,7 +248,7 @@ func (rc *RestarterController) syncHandler(key string) error {
 	namespaceMeta := namespace + "/" + name
 
 	// Get the Deployment/StatefulSet with this namespace/name/kind
-	obj, err := rc.fetchObject(namespace, name, kind)
+	obj, err := rc.fetchWorkload(namespace, name, kind)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			utilruntime.HandleError(fmt.Errorf("%s %q in work queue no longer exists", kind, namespaceMeta))
@@ -260,7 +263,7 @@ func (rc *RestarterController) syncHandler(key string) error {
 		arCtx := NewAutoRestarterContext(obj, WithServiceAccount(ServiceAccountName), WithLabels(obj.GetLabels()))
 		// Remove the needless CronJob.
 		if ok, err := rc.syncCronJobForDeletion(*arCtx); err != nil {
-			return fmt.Errorf("Deleting CronJob '%s/%s' err %v", rc.CronJobNamespace, joinCronJobName(arCtx.Namespace, arCtx.Name, arCtx.Kind), err)
+			return fmt.Errorf("Deleting CronJob '%s/%s' err: %v", rc.CronJobNamespace, joinCronJobName(arCtx.Namespace, arCtx.Name, arCtx.Kind), err)
 		} else if ok {
 			klog.Infof("%s %q is no need to restart", kind, namespaceMeta)
 		}
@@ -269,7 +272,7 @@ func (rc *RestarterController) syncHandler(key string) error {
 
 	// Validate cron expression
 	if _, err := cron.ParseStandard(schedule); err != nil {
-		utilruntime.HandleError(fmt.Errorf("Invalid cron expression '%s'", schedule))
+		utilruntime.HandleError(fmt.Errorf("Invalid cron expression %q", schedule))
 		return nil
 	}
 
@@ -282,7 +285,7 @@ func (rc *RestarterController) syncHandler(key string) error {
 			// add a finalizer to it
 			obj.SetFinalizers(append(obj.GetFinalizers(), AutoRestarterFinalizer))
 			if err := rc.updateObject(obj); err != nil {
-				utilruntime.HandleError(fmt.Errorf("Updating %s '%s' err %s", kind, namespaceMeta, err.Error()))
+				utilruntime.HandleError(fmt.Errorf("Updating %s %q err: %s", kind, namespaceMeta, err.Error()))
 				return err
 			}
 		}
@@ -296,7 +299,7 @@ func (rc *RestarterController) syncHandler(key string) error {
 			// Remove our finalizer from the list and update it.
 			obj.SetFinalizers(sliceutil.RemoveString(obj.GetFinalizers(), AutoRestarterFinalizer))
 			if err := rc.updateObject(obj); err != nil {
-				utilruntime.HandleError(fmt.Errorf("Updating %s '%s' err %s", kind, namespaceMeta, err.Error()))
+				utilruntime.HandleError(fmt.Errorf("Updating %s %q err: %s", kind, namespaceMeta, err.Error()))
 				return err
 			}
 		}
@@ -311,7 +314,7 @@ func (rc *RestarterController) syncHandler(key string) error {
 }
 
 // Get the Deployment/StatefulSet with this namespace/name/kind
-func (rc *RestarterController) fetchObject(namespace, name, kind string) (metav1.Object, error) {
+func (rc *RestarterController) fetchWorkload(namespace, name, kind string) (metav1.Object, error) {
 	switch strings.ToLower(kind) {
 	case "deployment":
 		return rc.deploymentsLister.Deployments(namespace).Get(name)
@@ -322,13 +325,13 @@ func (rc *RestarterController) fetchObject(namespace, name, kind string) (metav1
 	}
 }
 
-func (rc *RestarterController) syncCronJob(arCtx AutoRestarterContext) (*batchv1beta1.CronJob, error) {
+func (rc *RestarterController) syncCronJob(arCtx AutoRestarterContext) (*batchv1.CronJob, error) {
 	// Get the CronJob with namespace, name and kind of it's owner
 	name := joinCronJobName(arCtx.Namespace, arCtx.Name, arCtx.Kind)
 	cronJob, err := rc.cronJobsLister.CronJobs(rc.CronJobNamespace).Get(name)
 	if errors.IsNotFound(err) {
 		// Create the CronJob when it is not found
-		cronJob, err = rc.kubeclientset.BatchV1beta1().CronJobs(rc.CronJobNamespace).Create(
+		cronJob, err = rc.kubeclientset.BatchV1().CronJobs(rc.CronJobNamespace).Create(
 			context.TODO(), newCronJob(arCtx), metav1.CreateOptions{})
 	}
 	// If an error occurs during Get/Create, we'll requeue the item so we can
@@ -342,7 +345,7 @@ func (rc *RestarterController) syncCronJob(arCtx AutoRestarterContext) (*batchv1
 
 func (rc *RestarterController) syncCronJobForDeletion(arCtx AutoRestarterContext) (bool, error) {
 	name := joinCronJobName(arCtx.Namespace, arCtx.Name, arCtx.Kind)
-	if err := rc.kubeclientset.BatchV1beta1().CronJobs(rc.CronJobNamespace).Delete(context.TODO(),
+	if err := rc.kubeclientset.BatchV1().CronJobs(rc.CronJobNamespace).Delete(context.TODO(),
 		name, metav1.DeleteOptions{}); err != nil {
 		if errors.IsNotFound(err) {
 			return false, nil
@@ -387,7 +390,7 @@ func (rc *RestarterController) handleCronJob(obj interface{}) {
 			utilruntime.HandleError(fmt.Errorf("error decoding object tombstone, invalid type"))
 			return
 		}
-		klog.V(4).Infof("Recovered deleted object '%s' from tombstone", object.GetName())
+		klog.V(4).Infof("Recovered deleted object %q from tombstone", object.GetName())
 	}
 	klog.V(4).Infof("Processing object: %s", object.GetName())
 	if _, ok := object.GetAnnotations()[AnnRestarterKey]; object.GetNamespace() == rc.CronJobNamespace && ok {
@@ -429,7 +432,7 @@ func (rc *RestarterController) updateObject(obj interface{}) error {
 
 func (rc *RestarterController) addDeploymentFunc(obj interface{}) {
 	if arCtx := NewAutoRestarterContext(obj); arCtx != nil {
-		arCtx.Log("Adding")
+		arCtx.Log(eventAdding)
 	}
 	rc.enqueue(obj)
 }
@@ -441,21 +444,21 @@ func (rc *RestarterController) updateDeploymentFunc(old, new interface{}) {
 		return
 	}
 	if arCtx := NewAutoRestarterContext(new); arCtx != nil {
-		arCtx.Log("Updating")
+		arCtx.Log(eventUpdating)
 	}
 	rc.enqueue(new)
 }
 
 func (rc *RestarterController) deleteDeploymentFunc(obj interface{}) {
 	if arCtx := NewAutoRestarterContext(obj); arCtx != nil {
-		arCtx.Log("Deleting")
+		arCtx.Log(eventDeleting)
 	}
 	rc.enqueueForDeletion(obj)
 }
 
 func (rc *RestarterController) addStatefulSetFunc(obj interface{}) {
 	if arCtx := NewAutoRestarterContext(obj); arCtx != nil {
-		arCtx.Log("Adding")
+		arCtx.Log(eventAdding)
 	}
 	rc.enqueue(obj)
 }
@@ -467,40 +470,49 @@ func (rc *RestarterController) updateStatefulSetFunc(old, new interface{}) {
 		return
 	}
 	if arCtx := NewAutoRestarterContext(new); arCtx != nil {
-		arCtx.Log("Updating")
+		arCtx.Log(eventUpdating)
 	}
 	rc.enqueue(new)
 }
 
 func (rc *RestarterController) deleteStatefulSetFunc(obj interface{}) {
 	if arCtx := NewAutoRestarterContext(obj); arCtx != nil {
-		arCtx.Log("Deleting")
+		arCtx.Log(eventDeleting)
 	}
 	rc.enqueueForDeletion(obj)
 }
 
 func (rc *RestarterController) addCronJobFunc(obj interface{}) {
+	if !metav1.HasAnnotation(obj.(*batchv1.CronJob).ObjectMeta, AnnRestarterKey) {
+		return
+	}
 	if arCtx := NewAutoRestarterContext(obj); arCtx != nil {
-		arCtx.Log("Adding")
+		arCtx.Log(eventAdding)
 	}
 	rc.handleCronJob(obj)
 }
 
 func (rc *RestarterController) updateCronJobFunc(old, new interface{}) {
-	if old.(*batchv1beta1.CronJob).ResourceVersion == new.(*batchv1beta1.CronJob).ResourceVersion {
+	if !metav1.HasAnnotation(new.(*batchv1.CronJob).ObjectMeta, AnnRestarterKey) {
+		return
+	}
+	if old.(*batchv1.CronJob).ResourceVersion == new.(*batchv1.CronJob).ResourceVersion {
 		// Periodic resync will send update events for all known Deployments.
 		// Two different versions of the same Deployment will always have different RVs.
 		return
 	}
 	if arCtx := NewAutoRestarterContext(new); arCtx != nil {
-		arCtx.Log("Updating")
+		arCtx.Log(eventUpdating)
 	}
 	rc.handleCronJob(new)
 }
 
 func (rc *RestarterController) deleteCronJobFunc(obj interface{}) {
+	if !metav1.HasAnnotation(obj.(*batchv1.CronJob).ObjectMeta, AnnRestarterKey) {
+		return
+	}
 	if arCtx := NewAutoRestarterContext(obj); arCtx != nil {
-		arCtx.Log("Deleting")
+		arCtx.Log(eventDeleting)
 	}
 	rc.handleCronJob(obj)
 }

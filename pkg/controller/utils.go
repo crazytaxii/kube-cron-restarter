@@ -6,11 +6,13 @@ import (
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1beta1 "k8s.io/api/batch/v1beta1"
+	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 )
+
+const CronJobNameSuffix = "restarter"
 
 type (
 	AutoRestarterContext struct {
@@ -39,7 +41,7 @@ func NewAutoRestarterContext(obj interface{}, opts ...AutoRestarterContextOption
 		arCtx.Namespace = v.Namespace
 		arCtx.Kind = "StatefulSet"
 		arCtx.Object = v
-	case *batchv1beta1.CronJob:
+	case *batchv1.CronJob:
 		arCtx.Name = v.Name
 		arCtx.Namespace = v.Namespace
 		arCtx.Kind = "CronJob"
@@ -84,7 +86,7 @@ func (ctx *AutoRestarterContext) Log(operation string) {
 
 // Join namespace, name and kind for the name of our CronJob
 func joinCronJobName(namespace, name, kind string) string {
-	return fmt.Sprintf("%s-%s-%s-restarter", namespace, name, strings.ToLower(kind))
+	return fmt.Sprintf("%s-%s-%s-%s", namespace, name, strings.ToLower(kind), CronJobNameSuffix)
 }
 
 // Split namespace, name and kind from the name of our CronJob
@@ -93,7 +95,7 @@ func splitCronJobName(cronJobName string) (namespace, name, kind string, ok bool
 	if len(parts) != 4 {
 		return
 	}
-	if parts[3] != "restarter" {
+	if parts[3] != CronJobNameSuffix {
 		return
 	}
 	return parts[0], parts[1], parts[2], true

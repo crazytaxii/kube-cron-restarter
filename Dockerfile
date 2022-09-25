@@ -1,9 +1,9 @@
-FROM golang:1.16-alpine3.12 AS builder
+FROM golang:1.17-alpine3.16 AS builder
 WORKDIR /go/cron-restarter
 COPY . .
 RUN go build -o ./dist/restarter ./cmd/restarter
 
-FROM alpine:3.12
+FROM alpine:3.16
 RUN apk update \
     && apk add --no-cache \
     ca-certificates \
